@@ -6,13 +6,8 @@ After=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/247-data-collector
-EnvironmentFile=-/etc/auto-scrapy.env
 Environment=AUTO_SCRAPY_SOURCES_CONFIG_PATH=config/sources/target_smoke_sources.toml
-Environment=AUTO_SCRAPY_OLLAMA_MODEL=qwen2.5-coder:7b
-ExecStart=uv run python -m app.runtime --skip-analysis
-LimitNOFILE=65535
-TimeoutStartSec=2h
-RuntimeMaxSec=2h
+ExecStart=/home/xuan/xuanStudy/env-utils/miniforge3/envs/247-data-collector/bin/uv run python -m app.runtime
 
 # Optional: Ensure Python logs appear immediately in journalctl
 Environment=PYTHONUNBUFFERED=1
