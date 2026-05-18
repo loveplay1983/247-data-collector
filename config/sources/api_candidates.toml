@@ -1,0 +1,38 @@
+# API-friendly source candidates.
+# These are intentionally not active because the current source schema does not
+# implement API adapters. Keep them here for a future adapter milestone.
+
+[[candidates]]
+source_key = "semantic-scholar-api"
+title = "Semantic Scholar API"
+url = "https://api.semanticscholar.org/"
+
+[[candidates]]
+source_key = "openalex-api"
+title = "OpenAlex API"
+url = "https://docs.openalex.org/"
+
+[[candidates]]
+source_key = "crossref-rest-api"
+title = "Crossref REST API"
+url = "https://api.crossref.org/"
+
+[[candidates]]
+source_key = "pubmed-ncbi-eutilities"
+title = "PubMed / NCBI E-utilities"
+url = "https://www.ncbi.nlm.nih.gov/books/NBK25501/"
+
+[[candidates]]
+source_key = "pubmed-central-oai"
+title = "PubMed Central OAI"
+url = "https://www.ncbi.nlm.nih.gov/pmc/tools/oai/"
+
+[[candidates]]
+source_key = "biorxiv-medrxiv-api"
+title = "bioRxiv / medRxiv API"
+url = "https://api.biorxiv.org/"
+
+[[candidates]]
+source_key = "hacker-news-algolia-api"
+title = "Hacker News Algolia API"
+url = "https://hn.algolia.com/api"

@@ -186,53 +186,57 @@ def test_target_smoke_sources_preserve_existing_schema() -> None:
 
     actual_keys = [item.source_key for item in source_definitions]
     expected_keys = [
-        "the-ai-summer",
-        "lil-log",
-        "jay-alammar",
-        "colah-blog",
-        "distill",
-        "explained-ai",
         "arxiv-cs-ai-rss",
+        "arxiv-cs-lg-rss",
+        "arxiv-cs-cl-rss",
+        "arxiv-cs-cv-rss",
+        "arxiv-cs-ro-rss",
+        "arxiv-cs-se-rss",
+        "arxiv-stat-ml-rss",
+        "papers-with-code",
         "huggingface-blog",
-        "github-changelog",
-        "mcp-llmstxt",
-        "langchain-llmstxt",
-        "openai-news",
-        "anthropic-news",
+        "huggingface-papers-trending",
         "pytorch-blog",
         "google-research-blog",
+        "google-deepmind-blog",
+        "openai-news",
+        "anthropic-news",
+        "github-changelog",
+        "github-ai-ml-blog",
+        "distill",
+        "colah-blog",
+        "lil-log",
+        "jay-alammar",
+        "the-ai-summer",
+        "explained-ai",
+        "mcp-docs-llmstxt",
+        "langchain-docs-llmstxt",
+        "langgraph-docs",
+        "llamaindex-docs",
     ]
 
     assert set(actual_keys) == set(expected_keys)
     assert len(actual_keys) == len(expected_keys)
 
     actual_types = [item.source_type for item in source_definitions]
-    assert actual_types.count("rss") == 1
-    assert actual_types.count("seed") == 14
+    assert actual_types.count("rss") == 7
+    assert actual_types.count("seed") == 20
     assert set(actual_types) == {"rss", "seed"}
 
     source_map = {item.source_key: item for item in source_definitions}
 
     assert source_map["arxiv-cs-ai-rss"].path == "https://rss.arxiv.org/rss/cs.AI"
+    assert source_map["arxiv-cs-lg-rss"].path == "https://rss.arxiv.org/rss/cs.LG"
     assert source_map["anthropic-news"].seeds == ("https://www.anthropic.com/news",)
-    assert source_map["the-ai-summer"].seeds == (
-        "https://theaisummer.com/",
-        "https://theaisummer.com/learn-ai/",
-    )
-    assert source_map["distill"].seeds == (
-        "https://distill.pub/",
-        "https://distill.pub/archive/",
-    )
-    assert source_map["explained-ai"].seeds == (
-        "https://explained.ai/",
-        "https://mlbook.explained.ai/",
-    )
-    assert source_map["mcp-llmstxt"].seeds == (
+    assert source_map["papers-with-code"].seeds == ("https://paperswithcode.co/",)
+    assert source_map["mcp-docs-llmstxt"].seeds == (
         "https://modelcontextprotocol.io/llms.txt",
     )
-    assert source_map["langchain-llmstxt"].seeds == (
+    assert source_map["langchain-docs-llmstxt"].seeds == (
         "https://docs.langchain.com/llms.txt",
     )
+    assert source_map["langgraph-docs"].seeds == ("https://langchain-ai.github.io/langgraph/",)
+    assert source_map["llamaindex-docs"].seeds == ("https://docs.llamaindex.ai/",)
     assert source_map["openai-news"].allow_url_patterns == (
         "^https://openai\\.com/index/[^/?#]+/?$",
     )
@@ -304,6 +308,74 @@ def test_run_discovery_accepts_remote_rss_and_sitemap_paths(tmp_path: Path, monk
             "https://example.com/rss-remote",
             "https://example.com/sitemap-remote",
         ]
+
+
+def test_rss_and_sitemap_metadata_are_recorded_for_freshness(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "freshness-discovery.sqlite3"
+    config_path = tmp_path / "freshness_sources.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[[sources]]",
+                'source_key = "fresh-rss"',
+                'source_type = "rss"',
+                'title = "Fresh RSS"',
+                'path = "https://example.com/feed.xml"',
+                "",
+                "[[sources]]",
+                'source_key = "fresh-sitemap"',
+                'source_type = "sitemap"',
+                'title = "Fresh Sitemap"',
+                'path = "https://example.com/sitemap.xml"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_urlopen(request, timeout: int = 30) -> FakeXmlResponse:
+        url = _request_url(request)
+        if url.endswith("feed.xml"):
+            return FakeXmlResponse(
+                """
+                <rss><channel>
+                  <item>
+                    <link>https://example.com/rss-fresh</link>
+                    <pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate>
+                  </item>
+                </channel></rss>
+                """
+            )
+        return FakeXmlResponse(
+            """
+            <urlset>
+              <url>
+                <loc>https://example.com/sitemap-fresh</loc>
+                <lastmod>2024-01-02</lastmod>
+              </url>
+            </urlset>
+            """
+        )
+
+    monkeypatch.setattr(discovery, "urlopen", fake_urlopen)
+
+    run_discovery(config_path=config_path, database_path=database_path)
+
+    with connect_db(database_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT canonical_url, published_at, source_updated_at
+            FROM documents
+            ORDER BY canonical_url
+            """
+        ).fetchall()
+
+    assert [row["canonical_url"] for row in rows] == [
+        "https://example.com/rss-fresh",
+        "https://example.com/sitemap-fresh",
+    ]
+    assert rows[0]["published_at"] == "Mon, 01 Jan 2024 00:00:00 GMT"
+    assert rows[0]["source_updated_at"] == "Mon, 01 Jan 2024 00:00:00 GMT"
+    assert rows[1]["source_updated_at"] == "2024-01-02"
 
 
 def test_seed_discovery_follows_same_domain_child_links_with_bounded_depth(

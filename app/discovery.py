@@ -14,6 +14,7 @@ from .db import (
     connect_db,
     finish_crawl_run,
     init_db,
+    record_discovered_document_entries,
     record_discovered_documents,
     start_crawl_run,
     upsert_source,
@@ -92,6 +93,13 @@ class SeedDiscoveryOutput:
     failed_seeds: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class DocumentDiscoveryEntry:
+    canonical_url: str
+    published_at: str | None = None
+    source_updated_at: str | None = None
+
+
 class DiscoveryReadError(RuntimeError):
     pass
 
@@ -115,7 +123,7 @@ def get_sources_config_path() -> Path:
 
 def load_source_definitions(config_path: Path | None = None) -> list[SourceDefinition]:
     path = Path(config_path or get_sources_config_path())
-    payload = tomllib.loads(path.read_text(encoding="utf-8"))
+    payload = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     raw_sources = payload.get("sources")
 
     if not isinstance(raw_sources, list) or not raw_sources:
@@ -243,42 +251,108 @@ def _read_text_url(url: str, *, timeout: int = 30) -> str:
 
 
 def discover_rss_urls(xml_text: str) -> list[str]:
+    return [entry.canonical_url for entry in discover_rss_entries(xml_text)]
+
+
+def discover_rss_entries(xml_text: str) -> list[DocumentDiscoveryEntry]:
     root = ET.fromstring(xml_text)
-    urls: list[str] = []
+    entries: list[DocumentDiscoveryEntry] = []
 
     for element in root.iter():
         if _local_name(element.tag) == "item":
+            link = None
+            published_at = None
+            source_updated_at = None
             for child in element:
                 if _local_name(child.tag) == "link" and child.text:
-                    urls.append(child.text)
+                    link = child.text
+                if _local_name(child.tag) in {"pubDate", "published"} and child.text:
+                    published_at = child.text.strip()
+                if _local_name(child.tag) in {"updated", "lastBuildDate"} and child.text:
+                    source_updated_at = child.text.strip()
+            if link:
+                entries.append(
+                    DocumentDiscoveryEntry(
+                        canonical_url=normalize_url(link),
+                        published_at=published_at,
+                        source_updated_at=source_updated_at or published_at,
+                    )
+                )
         if _local_name(element.tag) == "entry":
+            link = None
+            published_at = None
+            source_updated_at = None
             for child in element:
-                if _local_name(child.tag) != "link":
-                    continue
-                href = child.attrib.get("href")
-                rel = child.attrib.get("rel", "alternate")
-                if href and rel == "alternate":
-                    urls.append(href)
+                child_name = _local_name(child.tag)
+                if child_name == "link":
+                    href = child.attrib.get("href")
+                    rel = child.attrib.get("rel", "alternate")
+                    if href and rel == "alternate":
+                        link = href
+                if child_name == "published" and child.text:
+                    published_at = child.text.strip()
+                if child_name == "updated" and child.text:
+                    source_updated_at = child.text.strip()
+            if link:
+                entries.append(
+                    DocumentDiscoveryEntry(
+                        canonical_url=normalize_url(link),
+                        published_at=published_at,
+                        source_updated_at=source_updated_at or published_at,
+                    )
+                )
 
-    return deduplicate_urls(urls)
+    deduped: list[DocumentDiscoveryEntry] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if entry.canonical_url in seen:
+            continue
+        seen.add(entry.canonical_url)
+        deduped.append(entry)
+    return deduped
 
 
 def discover_sitemap_urls(xml_text: str) -> list[str]:
+    return [entry.canonical_url for entry in discover_sitemap_entries(xml_text)]
+
+
+def discover_sitemap_entries(xml_text: str) -> list[DocumentDiscoveryEntry]:
     root = ET.fromstring(xml_text)
     root_name = _local_name(root.tag)
-    urls: list[str] = []
+    entries: list[DocumentDiscoveryEntry] = []
 
     if root_name == "sitemapindex":
         for element in root.iter():
             if _local_name(element.tag) == "loc" and element.text:
                 child_xml = _read_xml_input(element.text.strip())
-                urls.extend(discover_sitemap_urls(child_xml))
+                entries.extend(discover_sitemap_entries(child_xml))
     else:
-        for element in root.iter():
-            if _local_name(element.tag) == "loc" and element.text:
-                urls.append(element.text)
+        for element in root:
+            if _local_name(element.tag) != "url":
+                continue
+            loc = None
+            lastmod = None
+            for child in element:
+                if _local_name(child.tag) == "loc" and child.text:
+                    loc = child.text.strip()
+                if _local_name(child.tag) == "lastmod" and child.text:
+                    lastmod = child.text.strip()
+            if loc:
+                entries.append(
+                    DocumentDiscoveryEntry(
+                        canonical_url=normalize_url(loc),
+                        source_updated_at=lastmod,
+                    )
+                )
 
-    return deduplicate_urls(urls)
+    deduped: list[DocumentDiscoveryEntry] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if entry.canonical_url in seen:
+            continue
+        seen.add(entry.canonical_url)
+        deduped.append(entry)
+    return deduped
 
 
 def _same_domain(candidate_url: str, seed_url: str) -> bool:
@@ -447,6 +521,17 @@ def discover_source_urls(source_definition: SourceDefinition) -> list[str]:
     raise ValueError(f"unsupported source type: {source_definition.source_type}")
 
 
+def discover_source_entries(source_definition: SourceDefinition) -> list[DocumentDiscoveryEntry]:
+    if source_definition.source_type == "rss":
+        return discover_rss_entries(_read_xml_input(source_definition.path))
+    if source_definition.source_type == "sitemap":
+        return discover_sitemap_entries(_read_xml_input(source_definition.path))
+    return [
+        DocumentDiscoveryEntry(canonical_url=url)
+        for url in discover_source_urls(source_definition)
+    ]
+
+
 def _discover_source_urls_with_failures(
     source_definition: SourceDefinition,
 ) -> tuple[list[str], tuple[str, ...]]:
@@ -458,7 +543,16 @@ def _discover_source_urls_with_failures(
             deny_url_patterns=source_definition.deny_url_patterns,
         )
         return output.urls, output.failed_seeds
-    return discover_source_urls(source_definition), ()
+    return [entry.canonical_url for entry in discover_source_entries(source_definition)], ()
+
+
+def _discover_source_entries_with_failures(
+    source_definition: SourceDefinition,
+) -> tuple[list[DocumentDiscoveryEntry], tuple[str, ...]]:
+    if source_definition.source_type == "seed":
+        urls, failures = _discover_source_urls_with_failures(source_definition)
+        return [DocumentDiscoveryEntry(canonical_url=url) for url in urls], failures
+    return discover_source_entries(source_definition), ()
 
 
 def _config_path_for_db(path: Path) -> str:
@@ -527,11 +621,21 @@ def run_discovery(
                 )
 
             try:
-                canonical_urls, failed_seeds = _discover_source_urls_with_failures(source_definition)
-                inserted_count = record_discovered_documents(
+                discovery_entries, failed_seeds = _discover_source_entries_with_failures(
+                    source_definition
+                )
+                canonical_urls = [entry.canonical_url for entry in discovery_entries]
+                inserted_count = record_discovered_document_entries(
                     connection,
                     source_id=source_id,
-                    canonical_urls=canonical_urls,
+                    document_entries=[
+                        {
+                            "canonical_url": entry.canonical_url,
+                            "published_at": entry.published_at,
+                            "source_updated_at": entry.source_updated_at,
+                        }
+                        for entry in discovery_entries
+                    ],
                 )
                 _append_log(
                     log_path,

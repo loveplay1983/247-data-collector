@@ -1,3 +1,5 @@
+﻿# Fixture/regression-only source config. Do not use for production collection.
+
 [[sources]]
 source_key = "demo-rss"
 source_type = "rss"

@@ -41,6 +41,7 @@ class FetchRunResult:
     failed_count: int
     needs_browser_count: int
     browser_fetched_count: int
+    unchanged_count: int
     log_path: str
     status: str
 
@@ -66,14 +67,19 @@ def _guess_raw_extension(content_type: str, url: str) -> str:
     return ".bin"
 
 
-def build_raw_artifact_relative_path(url: str, content_type: str) -> Path:
+def build_raw_artifact_relative_path(
+    url: str,
+    content_type: str,
+    content_hash: str | None = None,
+) -> Path:
     parts = urlsplit(url)
     host_part = _sanitize_path_part(parts.netloc.lower())
     path_part = _sanitize_path_part(parts.path.strip("/"))
     name_seed = path_part if path_part != "index" else "index"
     digest = sha256(url.encode("utf-8")).hexdigest()[:12]
     extension = _guess_raw_extension(content_type, url)
-    return Path(host_part) / f"{name_seed}-{digest}{extension}"
+    version_part = f"-{content_hash[:16]}" if content_hash else ""
+    return Path(host_part) / f"{name_seed}-{digest}{version_part}{extension}"
 
 
 def should_escalate_to_browser(response: scrapy.http.Response) -> bool:
@@ -150,15 +156,21 @@ def _persist_raw_artifact(
     *,
     response: scrapy.http.Response,
     raw_dir: Path,
-) -> str:
+) -> tuple[str, str]:
+    content_hash = sha256(response.body).hexdigest()
     content_type = response.headers.get(b"content-type", b"application/octet-stream").decode(
         "latin-1"
     )
-    relative_raw_path = build_raw_artifact_relative_path(response.url, content_type)
+    relative_raw_path = build_raw_artifact_relative_path(
+        response.url,
+        content_type,
+        content_hash,
+    )
     raw_path = raw_dir / relative_raw_path
     raw_path.parent.mkdir(parents=True, exist_ok=True)
-    raw_path.write_bytes(response.body)
-    return str((Path("data") / "raw" / relative_raw_path).as_posix())
+    if not raw_path.exists():
+        raw_path.write_bytes(response.body)
+    return str((Path("data") / "raw" / relative_raw_path).as_posix()), content_hash
 
 
 class RawFetchSpider(scrapy.Spider):
@@ -190,20 +202,59 @@ class RawFetchSpider(scrapy.Spider):
 
     def start_requests(self):
         for document in self.documents:
+            headers: dict[str, str] = {}
+            if document.get("http_etag"):
+                headers["If-None-Match"] = str(document["http_etag"])
+            if document.get("http_last_modified"):
+                headers["If-Modified-Since"] = str(document["http_last_modified"])
             yield scrapy.Request(
                 url=str(document["canonical_url"]),
                 callback=self.parse_document,
                 errback=self.handle_failure,
                 dont_filter=True,
+                headers=headers,
                 meta={
                     "document_id": int(document["id"]),
+                    "raw_content_hash": document.get("raw_content_hash"),
                     "fetch_method": "http",
+                    "handle_httpstatus_list": [304],
                 },
             )
 
     def parse_document(self, response: scrapy.http.Response):
         document_id = int(response.meta["document_id"])
         fetch_method = str(response.meta.get("fetch_method", "http"))
+        previous_raw_content_hash = response.meta.get("raw_content_hash")
+        previous_extract_status = str(response.meta.get("extract_status") or "")
+        etag = response.headers.get(b"etag", b"").decode("latin-1").strip() or None
+        last_modified = (
+            response.headers.get(b"last-modified", b"").decode("latin-1").strip() or None
+        )
+
+        if response.status == 304:
+            self.run_stats["unchanged_count"] = int(self.run_stats["unchanged_count"]) + 1
+            with connect_db(self.database_path) as connection:
+                update_document_fetch_state(
+                    connection,
+                    document_id=document_id,
+                    fetch_status=(
+                        "unchanged" if previous_extract_status == "extracted" else "fetched"
+                    ),
+                    http_etag=etag,
+                    http_last_modified=last_modified,
+                )
+            _append_log(
+                self.log_path,
+                {
+                    "url": response.url,
+                    "document_id": document_id,
+                    "status": (
+                        "unchanged" if previous_extract_status == "extracted" else "fetched"
+                    ),
+                    "fetch_method": fetch_method,
+                },
+            )
+            return
 
         if fetch_method == "http" and should_escalate_to_browser(response):
             self.run_stats["needs_browser_count"] = int(self.run_stats["needs_browser_count"]) + 1
@@ -242,7 +293,38 @@ class RawFetchSpider(scrapy.Spider):
             )
             return
 
-        current_raw_path = _persist_raw_artifact(response=response, raw_dir=self.raw_dir)
+        current_raw_path, raw_content_hash = _persist_raw_artifact(
+            response=response,
+            raw_dir=self.raw_dir,
+        )
+        if previous_raw_content_hash and str(previous_raw_content_hash) == raw_content_hash:
+            self.run_stats["unchanged_count"] = int(self.run_stats["unchanged_count"]) + 1
+            with connect_db(self.database_path) as connection:
+                update_document_fetch_state(
+                    connection,
+                    document_id=document_id,
+                    fetch_status=(
+                        "unchanged" if previous_extract_status == "extracted" else "fetched"
+                    ),
+                    current_raw_path=current_raw_path,
+                    raw_content_hash=raw_content_hash,
+                    http_etag=etag,
+                    http_last_modified=last_modified,
+                )
+            _append_log(
+                self.log_path,
+                {
+                    "url": response.url,
+                    "document_id": document_id,
+                    "status": (
+                        "unchanged" if previous_extract_status == "extracted" else "fetched"
+                    ),
+                    "raw_path": current_raw_path,
+                    "fetch_method": fetch_method,
+                },
+            )
+            return
+
         self.run_stats["fetched_count"] = int(self.run_stats["fetched_count"]) + 1
         if fetch_method == "browser":
             self.run_stats["browser_fetched_count"] = (
@@ -255,6 +337,10 @@ class RawFetchSpider(scrapy.Spider):
                 document_id=document_id,
                 fetch_status="fetched",
                 current_raw_path=current_raw_path,
+                raw_content_hash=raw_content_hash,
+                http_etag=etag,
+                http_last_modified=last_modified,
+                mark_extract_pending=True,
             )
 
         _append_log(
@@ -263,10 +349,11 @@ class RawFetchSpider(scrapy.Spider):
                 "url": response.url,
                 "document_id": document_id,
                 "status": "fetched",
-                "raw_path": current_raw_path,
-                "fetch_method": fetch_method,
-            },
-        )
+                    "raw_path": current_raw_path,
+                    "raw_content_hash": raw_content_hash,
+                    "fetch_method": fetch_method,
+                },
+            )
 
     def handle_failure(self, failure):
         request = failure.request
@@ -318,6 +405,12 @@ def run_fetch(
             raise ValueError(f"unknown source_key: {source_key}")
         documents = [
             {"id": int(row["id"]), "canonical_url": str(row["canonical_url"])}
+            | {
+                "raw_content_hash": row["raw_content_hash"],
+                "extract_status": row["extract_status"],
+                "http_etag": row["http_etag"],
+                "http_last_modified": row["http_last_modified"],
+            }
             for row in list_documents_for_fetch(connection, source_id=source_id)
         ]
         crawl_run_id = start_crawl_run(
@@ -342,6 +435,7 @@ def run_fetch(
         "failed_count": 0,
         "needs_browser_count": 0,
         "browser_fetched_count": 0,
+        "unchanged_count": 0,
         "errors": [],
     }
 
@@ -361,6 +455,7 @@ def run_fetch(
     failed_count = int(run_stats["failed_count"])
     needs_browser_count = int(run_stats["needs_browser_count"])
     browser_fetched_count = int(run_stats["browser_fetched_count"])
+    unchanged_count = int(run_stats["unchanged_count"])
     errors = list(run_stats["errors"])
 
     if failed_count:
@@ -382,6 +477,7 @@ def run_fetch(
             "failed_count": failed_count,
             "needs_browser_count": needs_browser_count,
             "browser_fetched_count": browser_fetched_count,
+            "unchanged_count": unchanged_count,
             "log_path": relative_log_path,
             "error": error_message or "",
         },
@@ -404,6 +500,7 @@ def run_fetch(
         failed_count=failed_count,
         needs_browser_count=needs_browser_count,
         browser_fetched_count=browser_fetched_count,
+        unchanged_count=unchanged_count,
         log_path=relative_log_path,
         status=status,
     )

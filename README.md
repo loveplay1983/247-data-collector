@@ -255,8 +255,9 @@ uv run python -c "from app.db import init_db; print(init_db())"
 
 The implementation keeps two source config roles separate:
 
-- `config/sources/target_smoke_sources.toml` is the normal project default when present, and is the first real 1080 Ti target-machine smoke config.
+- `config/sources/target_smoke_sources.toml` is the formal production source pool. The word `smoke` is historical.
 - `config/sources/demo_sources.toml` is fixture/regression-only and should be selected explicitly when needed.
+- `config/sources/api_candidates.toml` lists open API candidates that are not active until API adapters exist.
 
 The source config selection order is:
 
@@ -295,6 +296,29 @@ uv run flask --app app run
 uv run python -m app.runtime
 uv run python -m app.runtime --help
 ```
+
+Collection-only run:
+
+```powershell
+uv run python -m app.runtime --skip-analysis
+```
+
+Capped summary run:
+
+```powershell
+uv run python -m app.runtime --analysis-limit-per-source 5
+```
+
+Repeated runs are freshness-aware:
+
+- rediscovered existing URLs update `last_seen_at` and are not duplicated
+- RSS published/updated and sitemap `lastmod` metadata are stored when available
+- ETag and Last-Modified are reused on refetch
+- HTTP 304 and matching raw content hashes are counted as unchanged
+- unchanged content is not sent back through extract/summary when already processed
+- changed content writes a new raw/cleaned/derived artifact path instead of overwriting old artifacts
+
+Runtime logs include Linux open-FD counts when `/proc/self/fd` exists. Runtime also uses an app-level `data/runtime.lock` to prevent overlapping runs.
 
 ### 7.4 开发笔记本回归入口
 
@@ -755,6 +779,20 @@ Recommended selective analysis:
 uv run python -m app.runtime --source-key openai-news --analysis-limit-per-source 5
 uv run python -m app.runtime --source-key pytorch-blog --analysis-limit-per-source 5
 ```
+
+Too-many-open-files diagnostics on the target machine:
+
+```bash
+ulimit -n
+lsof -p <pid> | wc -l
+ls /proc/<pid>/fd | wc -l
+systemctl status auto-scrapy-runtime.service
+journalctl -u auto-scrapy-runtime.service -n 200 --no-pager
+find data/logs -type f | wc -l
+```
+
+Never schedule the full pipeline every 1 minute. The systemd scheduled run
+should use `--skip-analysis`; run capped analysis separately.
 
 ### Remaining Technical Work
 

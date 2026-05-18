@@ -4,6 +4,7 @@ import json
 import threading
 
 from app.db import connect_db
+import app.runtime as runtime
 from app.runtime import run_pipeline_once
 
 
@@ -365,3 +366,30 @@ def test_run_pipeline_once_continues_past_failed_discovery_source(tmp_path: Path
         ("fetch", "good-source"),
         ("extract", "good-source"),
     ]
+
+
+def test_append_log_and_runtime_lock_do_not_accumulate_handlers(tmp_path: Path) -> None:
+    import logging
+
+    root_handler_count = len(logging.getLogger().handlers)
+    log_path = tmp_path / "data" / "logs" / "runtime-run-test.log"
+    before_fd_count = runtime._open_fd_count()
+
+    for index in range(50):
+        runtime._append_log(log_path, {"event": "repeat", "index": index})
+
+    after_fd_count = runtime._open_fd_count()
+    if before_fd_count is not None and after_fd_count is not None:
+        assert after_fd_count <= before_fd_count + 1
+    assert len(logging.getLogger().handlers) == root_handler_count
+    assert len(log_path.read_text(encoding="utf-8").splitlines()) == 50
+
+    lock_path = tmp_path / "data" / "runtime.lock"
+    with runtime._runtime_lock(lock_path):
+        assert lock_path.exists()
+        try:
+            with runtime._runtime_lock(lock_path):
+                raise AssertionError("nested runtime lock should not be acquired")
+        except RuntimeError:
+            pass
+    assert not lock_path.exists()

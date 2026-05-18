@@ -7,7 +7,12 @@ __pycache__/
 .coverage
 htmlcov/
 .venv/
+.env
+.env.*
+!.env.example
+instance/*.sqlite
 instance/*.sqlite3
+instance/*.db
 data/raw/*
 !data/raw/.gitkeep
 data/cleaned/*
@@ -16,6 +21,10 @@ data/derived/*
 !data/derived/.gitkeep
 data/logs/*
 !data/logs/.gitkeep
+data/runtime.lock
+*.log
+*.bak
+*.backup
 *.un~
 .DS_Store
 Thumbs.db

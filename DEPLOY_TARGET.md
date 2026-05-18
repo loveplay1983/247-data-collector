@@ -82,11 +82,15 @@ The normal project source config is:
 config/sources/target_smoke_sources.toml
 ```
 
+This is the formal production source pool. The filename is historical.
+
 The demo config is fixture/regression-only:
 
 ```text
 config/sources/demo_sources.toml
 ```
+
+Do not use `demo_sources.toml` for production collection.
 
 Current source config resolution order:
 
@@ -138,7 +142,11 @@ data/cleaned/
 data/derived/
 data/logs/
 instance/auto_scrapy.sqlite3
+.venv/
 ```
+
+Do not copy `.venv`, logs, DBs, `data/raw`, `data/cleaned`, or `data/derived`
+through Git.
 
 ## 6. Manual Target-Machine Validation First
 
@@ -156,6 +164,15 @@ This runs:
 ```text
 discovery -> fetch -> extract
 ```
+
+Repeated-run behavior:
+
+- old canonical URLs are rediscovered and update `last_seen_at`, not duplicated
+- new canonical URLs are inserted and processed
+- RSS dates and sitemap `lastmod` are stored when available
+- ETag / Last-Modified are sent on refetch when available
+- unchanged content skips repeated extract/summary once already processed
+- changed content creates new raw/cleaned/derived artifact paths
 
 Small capped analysis run:
 
@@ -208,6 +225,9 @@ EnvironmentFile=/etc/auto-scrapy.env
 ExecStart=<uv-bin> run python -m app.runtime --skip-analysis
 
 Nice=10
+LimitNOFILE=65535
+TimeoutStartSec=2h
+RuntimeMaxSec=2h
 NoNewPrivileges=true
 PrivateTmp=true
 
@@ -396,6 +416,21 @@ Runtime logs:
 ls -lh data/logs/
 tail -n 100 data/logs/runtime-run-*.log
 ```
+
+Too-many-open-files diagnostics:
+
+```bash
+ulimit -n
+lsof -p <pid> | wc -l
+ls /proc/<pid>/fd | wc -l
+systemctl status auto-scrapy-runtime.service
+journalctl -u auto-scrapy-runtime.service -n 200 --no-pager
+find data/logs -type f | wc -l
+```
+
+`LimitNOFILE=65535` is defensive. It does not replace fixing leaked file
+descriptors. Runtime logs include Linux open-FD counts when `/proc/self/fd`
+exists, and `app.runtime` uses `data/runtime.lock` to prevent overlapping runs.
 
 GPU monitoring:
 

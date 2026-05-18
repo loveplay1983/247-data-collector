@@ -25,8 +25,12 @@ CREATE TABLE IF NOT EXISTS documents (
     title TEXT,
     author TEXT,
     published_at TEXT,
+    source_updated_at TEXT,
     current_raw_path TEXT,
     current_cleaned_path TEXT,
+    raw_content_hash TEXT,
+    http_etag TEXT,
+    http_last_modified TEXT,
     fetch_status TEXT NOT NULL DEFAULT 'discovered',
     extract_status TEXT NOT NULL DEFAULT 'pending',
     last_seen_at TEXT,
@@ -95,6 +99,18 @@ def _ensure_additive_schema(connection: sqlite3.Connection) -> None:
     }
     if "source_content_hash" not in document_version_columns:
         connection.execute("ALTER TABLE document_versions ADD COLUMN source_content_hash TEXT")
+
+    document_columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(documents)").fetchall()
+    }
+    for column_name in (
+        "source_updated_at",
+        "raw_content_hash",
+        "http_etag",
+        "http_last_modified",
+    ):
+        if column_name not in document_columns:
+            connection.execute(f"ALTER TABLE documents ADD COLUMN {column_name} TEXT")
 
     connection.execute(
         """
@@ -222,6 +238,8 @@ def record_discovered_document(
     *,
     source_id: int,
     canonical_url: str,
+    published_at: str | None = None,
+    source_updated_at: str | None = None,
 ) -> bool:
     existing = connection.execute(
         "SELECT id FROM documents WHERE canonical_url = ?",
@@ -232,10 +250,18 @@ def record_discovered_document(
             """
             UPDATE documents
             SET last_seen_at = CURRENT_TIMESTAMP,
+                published_at = COALESCE(?, published_at),
+                source_updated_at = COALESCE(?, source_updated_at),
+                fetch_status = CASE
+                    WHEN ? IS NOT NULL
+                     AND (source_updated_at IS NULL OR ? > source_updated_at)
+                    THEN 'discovered'
+                    ELSE fetch_status
+                END,
                 updated_at = CURRENT_TIMESTAMP
             WHERE canonical_url = ?
             """,
-            (canonical_url,),
+            (published_at, source_updated_at, source_updated_at, source_updated_at, canonical_url),
         )
         return False
 
@@ -244,13 +270,15 @@ def record_discovered_document(
         INSERT INTO documents (
             source_id,
             canonical_url,
+            published_at,
+            source_updated_at,
             fetch_status,
             extract_status,
             last_seen_at
         )
-        VALUES (?, ?, 'discovered', 'pending', CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, ?, 'discovered', 'pending', CURRENT_TIMESTAMP)
         """,
-        (source_id, canonical_url),
+        (source_id, canonical_url, published_at, source_updated_at),
     )
     return True
 
@@ -267,6 +295,29 @@ def record_discovered_documents(
             connection,
             source_id=source_id,
             canonical_url=canonical_url,
+        )
+        if inserted:
+            inserted_count += 1
+    return inserted_count
+
+
+def record_discovered_document_entries(
+    connection: sqlite3.Connection,
+    *,
+    source_id: int,
+    document_entries: list[dict[str, str | None]],
+) -> int:
+    inserted_count = 0
+    for entry in document_entries:
+        canonical_url = entry.get("canonical_url")
+        if not canonical_url:
+            continue
+        inserted = record_discovered_document(
+            connection,
+            source_id=source_id,
+            canonical_url=canonical_url,
+            published_at=entry.get("published_at"),
+            source_updated_at=entry.get("source_updated_at"),
         )
         if inserted:
             inserted_count += 1
@@ -290,7 +341,8 @@ def list_documents_for_fetch(
 ) -> list[sqlite3.Row]:
     return connection.execute(
         """
-        SELECT id, canonical_url, fetch_status
+        SELECT id, canonical_url, fetch_status, extract_status, current_raw_path,
+               raw_content_hash, http_etag, http_last_modified
         FROM documents
         WHERE source_id = ?
           AND fetch_status IN ('discovered', 'fetch_failed', 'needs_browser')
@@ -306,16 +358,32 @@ def update_document_fetch_state(
     document_id: int,
     fetch_status: str,
     current_raw_path: str | None = None,
+    raw_content_hash: str | None = None,
+    http_etag: str | None = None,
+    http_last_modified: str | None = None,
+    mark_extract_pending: bool = False,
 ) -> None:
     connection.execute(
         """
         UPDATE documents
         SET fetch_status = ?,
             current_raw_path = COALESCE(?, current_raw_path),
+            raw_content_hash = COALESCE(?, raw_content_hash),
+            http_etag = COALESCE(?, http_etag),
+            http_last_modified = COALESCE(?, http_last_modified),
+            extract_status = CASE WHEN ? THEN 'pending' ELSE extract_status END,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
         """,
-        (fetch_status, current_raw_path, document_id),
+        (
+            fetch_status,
+            current_raw_path,
+            raw_content_hash,
+            http_etag,
+            http_last_modified,
+            int(mark_extract_pending),
+            document_id,
+        ),
     )
 
 

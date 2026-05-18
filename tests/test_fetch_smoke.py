@@ -2,8 +2,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
 
-from app.db import connect_db, init_db, record_discovered_documents, upsert_source
+from app.db import (
+    connect_db,
+    init_db,
+    record_discovered_documents,
+    update_document_fetch_state,
+    upsert_source,
+)
 from app.fetch import RawFetchSpider, run_fetch
+from app.runtime import _run_fetch_isolated
 
 
 class _FixtureHandler(BaseHTTPRequestHandler):
@@ -45,6 +52,29 @@ class _FixtureHandler(BaseHTTPRequestHandler):
 
         self.send_response(404)
         self.end_headers()
+
+    def log_message(self, format: str, *args) -> None:
+        return
+
+
+class _ConditionalFixtureHandler(BaseHTTPRequestHandler):
+    body = b"<html><body><article>conditional page content</article></body></html>"
+
+    def do_GET(self) -> None:
+        if self.headers.get("If-None-Match") == '"fixture-etag"':
+            self.send_response(304)
+            self.send_header("ETag", '"fixture-etag"')
+            self.send_header("Last-Modified", "Mon, 01 Jan 2024 00:00:00 GMT")
+            self.end_headers()
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(self.body)))
+        self.send_header("ETag", '"fixture-etag"')
+        self.send_header("Last-Modified", "Mon, 01 Jan 2024 00:00:00 GMT")
+        self.end_headers()
+        self.wfile.write(self.body)
 
     def log_message(self, format: str, *args) -> None:
         return
@@ -169,6 +199,77 @@ def test_run_fetch_persists_raw_updates_fetch_status_and_marks_browser_escalatio
         assert '"event": "run_finished"' in log_text
         assert '"fetch_method": "http"' in log_text
         assert '"fetch_method": "browser"' in log_text
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_run_fetch_uses_conditional_headers_and_marks_304_unchanged(tmp_path: Path) -> None:
+    database_path = tmp_path / "fetch-304.sqlite3"
+    raw_dir = tmp_path / "data" / "raw"
+    log_dir = tmp_path / "data" / "logs"
+    init_db(database_path)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _ConditionalFixtureHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/conditional"
+        with connect_db(database_path) as connection:
+            source_id = upsert_source(
+                connection,
+                source_key="conditional-fetch",
+                source_type="seed",
+                title="Conditional Fetch",
+                config_path="tests/conditional-fetch",
+            )
+            record_discovered_documents(
+                connection,
+                source_id=source_id,
+                canonical_urls=[url],
+            )
+
+        first = _run_fetch_isolated(
+            source_key="conditional-fetch",
+            database_path=database_path,
+            raw_dir=raw_dir,
+            log_dir=log_dir,
+        )
+        assert first.fetched_count == 1
+        assert first.unchanged_count == 0
+
+        with connect_db(database_path) as connection:
+            row = connection.execute(
+                "SELECT id, raw_content_hash, http_etag FROM documents WHERE canonical_url = ?",
+                (url,),
+            ).fetchone()
+            assert row is not None
+            assert row["http_etag"] == '"fixture-etag"'
+            update_document_fetch_state(
+                connection,
+                document_id=int(row["id"]),
+                fetch_status="discovered",
+            )
+
+        second = _run_fetch_isolated(
+            source_key="conditional-fetch",
+            database_path=database_path,
+            raw_dir=raw_dir,
+            log_dir=log_dir,
+        )
+
+        assert second.fetched_count == 0
+        assert second.unchanged_count == 1
+        with connect_db(database_path) as connection:
+            row = connection.execute(
+                "SELECT fetch_status, extract_status, current_raw_path FROM documents WHERE canonical_url = ?",
+                (url,),
+            ).fetchone()
+            assert row["fetch_status"] == "fetched"
+            assert row["extract_status"] == "pending"
+            assert row["current_raw_path"] is not None
     finally:
         server.shutdown()
         server.server_close()

@@ -114,13 +114,14 @@ def _sanitize_path_part(value: str) -> str:
     return sanitized.strip("-") or "index"
 
 
-def build_cleaned_artifact_relative_path(url: str) -> Path:
+def build_cleaned_artifact_relative_path(url: str, content_hash: str | None = None) -> Path:
     parts = urlsplit(url)
     host_part = _sanitize_path_part(parts.netloc.lower())
     path_part = _sanitize_path_part(parts.path.strip("/"))
     name_seed = path_part if path_part != "index" else "index"
     digest = sha256(url.encode("utf-8")).hexdigest()[:12]
-    return Path(host_part) / f"{name_seed}-{digest}.md"
+    version_part = f"-{content_hash[:16]}" if content_hash else ""
+    return Path(host_part) / f"{name_seed}-{digest}{version_part}.md"
 
 
 def _append_log(log_path: Path, payload: dict[str, str | int]) -> None:
@@ -315,11 +316,17 @@ def run_extract(
         try:
             raw_bytes = raw_path.read_bytes()
             output = extract_cleaned_content(raw_bytes, current_raw_path)
+            cleaned_content = output.cleaned_text.rstrip() + "\n"
+            cleaned_hash = sha256(cleaned_content.encode("utf-8")).hexdigest()
 
-            relative_cleaned_path = build_cleaned_artifact_relative_path(canonical_url)
+            relative_cleaned_path = build_cleaned_artifact_relative_path(
+                canonical_url,
+                cleaned_hash,
+            )
             cleaned_path = cleaned_root / relative_cleaned_path
             cleaned_path.parent.mkdir(parents=True, exist_ok=True)
-            cleaned_path.write_text(output.cleaned_text.rstrip() + "\n", encoding="utf-8")
+            if not cleaned_path.exists():
+                cleaned_path.write_text(cleaned_content, encoding="utf-8")
 
             stored_cleaned_path = str((Path("data") / "cleaned" / relative_cleaned_path).as_posix())
             with connect_db(db_path) as connection:
