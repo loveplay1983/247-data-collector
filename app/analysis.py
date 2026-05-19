@@ -6,12 +6,12 @@ import json
 
 from .config import load_settings
 from .db import (
-    connect_db,
     finish_crawl_run,
     get_source_id_by_key,
     get_document_version_for_source_content,
     init_db,
     list_documents_for_analysis,
+    open_db,
     start_crawl_run,
 )
 from .versioning import persist_document_version, resolve_artifact_path
@@ -123,7 +123,7 @@ def run_summary_draft(
     logs_root.mkdir(parents=True, exist_ok=True)
     prompt_template = _load_prompt_template(prompt_file)
 
-    with connect_db(db_path) as connection:
+    with open_db(db_path) as connection:
         source_id = get_source_id_by_key(connection, source_key)
         if source_id is None:
             raise ValueError(f"unknown source_key: {source_key}")
@@ -172,7 +172,7 @@ def run_summary_draft(
         try:
             cleaned_text = cleaned_path.read_text(encoding="utf-8")
             source_content_hash = sha256(cleaned_text.encode("utf-8")).hexdigest()
-            with connect_db(db_path) as connection:
+            with open_db(db_path) as connection:
                 existing_version = get_document_version_for_source_content(
                     connection,
                     document_id=document_id,
@@ -273,7 +273,7 @@ def run_summary_draft(
         },
     )
 
-    with connect_db(db_path) as connection:
+    with open_db(db_path) as connection:
         finish_crawl_run(
             connection,
             run_id=crawl_run_id,

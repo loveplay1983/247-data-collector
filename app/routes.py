@@ -2,7 +2,7 @@ from pathlib import Path
 
 from flask import Blueprint, abort, current_app, render_template
 
-from .db import connect_db, get_document_version
+from .db import get_document_version, open_db
 
 
 bp = Blueprint("ui", __name__)
@@ -49,7 +49,7 @@ def _read_stored_text(stored_path: str, *, expected_layer: str) -> str:
 
 
 def _get_document(document_id: int):
-    with connect_db(_database_path()) as connection:
+    with open_db(_database_path()) as connection:
         document = connection.execute(
             """
             SELECT d.id, d.canonical_url, d.title, d.author, d.published_at,
@@ -85,7 +85,7 @@ def index():
 
 @bp.route("/documents")
 def documents():
-    with connect_db(_database_path()) as connection:
+    with open_db(_database_path()) as connection:
         rows = connection.execute(
             """
             SELECT d.id, d.canonical_url, d.title, d.fetch_status, d.extract_status,
@@ -143,7 +143,7 @@ def document_artifact(document_id: int, artifact_kind: str):
 
 @bp.route("/sources")
 def sources():
-    with connect_db(_database_path()) as connection:
+    with open_db(_database_path()) as connection:
         rows = connection.execute(
             """
             SELECT s.id, s.source_key, s.source_type, s.title, s.enabled, s.updated_at,
@@ -161,7 +161,7 @@ def sources():
 
 @bp.route("/sources/<int:source_id>")
 def source_detail(source_id: int):
-    with connect_db(_database_path()) as connection:
+    with open_db(_database_path()) as connection:
         source = connection.execute(
             """
             SELECT id, source_key, source_type, title, config_path, enabled, created_at, updated_at
@@ -198,7 +198,7 @@ def source_detail(source_id: int):
 
 @bp.route("/runs")
 def runs():
-    with connect_db(_database_path()) as connection:
+    with open_db(_database_path()) as connection:
         rows = connection.execute(
             """
             SELECT r.id, r.run_kind, r.status, r.started_at, r.finished_at,
@@ -214,7 +214,7 @@ def runs():
 
 @bp.route("/runs/<int:run_id>")
 def run_detail(run_id: int):
-    with connect_db(_database_path()) as connection:
+    with open_db(_database_path()) as connection:
         run = connection.execute(
             """
             SELECT r.id, r.run_kind, r.status, r.started_at, r.finished_at,
@@ -245,7 +245,7 @@ def run_detail(run_id: int):
 
 @bp.route("/versions/<int:version_id>")
 def version_detail(version_id: int):
-    with connect_db(_database_path()) as connection:
+    with open_db(_database_path()) as connection:
         version = get_document_version(connection, version_id=version_id)
         if version is None:
             abort(404)

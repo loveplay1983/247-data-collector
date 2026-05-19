@@ -11,11 +11,11 @@ from trafilatura.metadata import extract_metadata
 
 from .config import load_settings
 from .db import (
-    connect_db,
     finish_crawl_run,
     get_source_id_by_key,
     init_db,
     list_documents_for_extract,
+    open_db,
     requeue_document_for_fetch,
     start_crawl_run,
     update_document_extract_state,
@@ -274,7 +274,7 @@ def run_extract(
     cleaned_root.mkdir(parents=True, exist_ok=True)
     logs_root.mkdir(parents=True, exist_ok=True)
 
-    with connect_db(db_path) as connection:
+    with open_db(db_path) as connection:
         source_id = get_source_id_by_key(connection, source_key)
         if source_id is None:
             raise ValueError(f"unknown source_key: {source_key}")
@@ -329,7 +329,7 @@ def run_extract(
                 cleaned_path.write_text(cleaned_content, encoding="utf-8")
 
             stored_cleaned_path = str((Path("data") / "cleaned" / relative_cleaned_path).as_posix())
-            with connect_db(db_path) as connection:
+            with open_db(db_path) as connection:
                 update_document_extract_state(
                     connection,
                     document_id=document_id,
@@ -356,7 +356,7 @@ def run_extract(
             error_text = f"{canonical_url}: raw artifact missing; queued for refetch: {current_raw_path}"
             errors.append(error_text)
 
-            with connect_db(db_path) as connection:
+            with open_db(db_path) as connection:
                 requeue_document_for_fetch(connection, document_id=document_id)
 
             _append_log(
@@ -374,7 +374,7 @@ def run_extract(
             error_text = f"{canonical_url}: {exc}"
             errors.append(error_text)
 
-            with connect_db(db_path) as connection:
+            with open_db(db_path) as connection:
                 update_document_extract_state(
                     connection,
                     document_id=document_id,
@@ -395,7 +395,7 @@ def run_extract(
             error_text = f"{canonical_url}: {exc}"
             errors.append(error_text)
 
-            with connect_db(db_path) as connection:
+            with open_db(db_path) as connection:
                 update_document_extract_state(
                     connection,
                     document_id=document_id,
@@ -434,7 +434,7 @@ def run_extract(
         },
     )
 
-    with connect_db(db_path) as connection:
+    with open_db(db_path) as connection:
         finish_crawl_run(
             connection,
             run_id=crawl_run_id,

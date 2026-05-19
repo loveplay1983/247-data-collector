@@ -4,7 +4,7 @@ Description=Schedule bounded auto-scrapy runtime runs
 [Timer]
 OnBootSec=1m
 OnActiveSec=1m
-onUnitActiveSec=2h
+OnUnitActiveSec=2h
 Persistent=true
 Unit=auto-scrapy-runtime.service
 

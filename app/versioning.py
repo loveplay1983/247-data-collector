@@ -6,10 +6,10 @@ import re
 
 from .config import load_settings
 from .db import (
-    connect_db,
     get_document_for_versioning,
     init_db,
     insert_document_version,
+    open_db,
 )
 
 
@@ -74,7 +74,7 @@ def persist_document_version(
     derived_root = Path(derived_dir or settings.derived_dir)
     derived_root.mkdir(parents=True, exist_ok=True)
 
-    with connect_db(db_path) as connection:
+    with open_db(db_path) as connection:
         document_row = get_document_for_versioning(connection, document_id=document_id)
         if document_row is None:
             raise ValueError(f"unknown document_id: {document_id}")
@@ -101,7 +101,7 @@ def persist_document_version(
     artifact_path.write_bytes(artifact_bytes)
 
     stored_path = str((Path("data") / "derived" / relative_path).as_posix())
-    with connect_db(db_path) as connection:
+    with open_db(db_path) as connection:
         version_id = insert_document_version(
             connection,
             document_id=document_id,

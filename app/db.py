@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
 
@@ -92,6 +93,16 @@ def connect_db(database_path: Path | None = None) -> sqlite3.Connection:
     return connection
 
 
+@contextmanager
+def open_db(database_path: Path | None = None):
+    connection = connect_db(database_path)
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
 def _ensure_additive_schema(connection: sqlite3.Connection) -> None:
     document_version_columns = {
         row["name"]
@@ -142,7 +153,7 @@ def init_db(database_path: Path | None = None) -> Path:
     path = Path(database_path or get_database_path())
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    with connect_db(path) as connection:
+    with open_db(path) as connection:
         connection.executescript(SCHEMA_SQL)
         _ensure_additive_schema(connection)
 

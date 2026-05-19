@@ -14,11 +14,11 @@ from scrapy_playwright.page import PageMethod
 
 from .config import load_settings
 from .db import (
-    connect_db,
     finish_crawl_run,
     get_source_id_by_key,
     init_db,
     list_documents_for_fetch,
+    open_db,
     start_crawl_run,
     update_document_fetch_state,
 )
@@ -233,7 +233,7 @@ class RawFetchSpider(scrapy.Spider):
 
         if response.status == 304:
             self.run_stats["unchanged_count"] = int(self.run_stats["unchanged_count"]) + 1
-            with connect_db(self.database_path) as connection:
+            with open_db(self.database_path) as connection:
                 update_document_fetch_state(
                     connection,
                     document_id=document_id,
@@ -259,7 +259,7 @@ class RawFetchSpider(scrapy.Spider):
         if fetch_method == "http" and should_escalate_to_browser(response):
             self.run_stats["needs_browser_count"] = int(self.run_stats["needs_browser_count"]) + 1
 
-            with connect_db(self.database_path) as connection:
+            with open_db(self.database_path) as connection:
                 update_document_fetch_state(
                     connection,
                     document_id=document_id,
@@ -299,7 +299,7 @@ class RawFetchSpider(scrapy.Spider):
         )
         if previous_raw_content_hash and str(previous_raw_content_hash) == raw_content_hash:
             self.run_stats["unchanged_count"] = int(self.run_stats["unchanged_count"]) + 1
-            with connect_db(self.database_path) as connection:
+            with open_db(self.database_path) as connection:
                 update_document_fetch_state(
                     connection,
                     document_id=document_id,
@@ -331,7 +331,7 @@ class RawFetchSpider(scrapy.Spider):
                 int(self.run_stats["browser_fetched_count"]) + 1
             )
 
-        with connect_db(self.database_path) as connection:
+        with open_db(self.database_path) as connection:
             update_document_fetch_state(
                 connection,
                 document_id=document_id,
@@ -361,7 +361,7 @@ class RawFetchSpider(scrapy.Spider):
         error_text = str(failure.value)
         fetch_method = str(request.meta.get("fetch_method", "http"))
 
-        with connect_db(self.database_path) as connection:
+        with open_db(self.database_path) as connection:
             update_document_fetch_state(
                 connection,
                 document_id=document_id,
@@ -399,7 +399,7 @@ def run_fetch(
     raw_root.mkdir(parents=True, exist_ok=True)
     logs_root.mkdir(parents=True, exist_ok=True)
 
-    with connect_db(db_path) as connection:
+    with open_db(db_path) as connection:
         source_id = get_source_id_by_key(connection, source_key)
         if source_id is None:
             raise ValueError(f"unknown source_key: {source_key}")
@@ -483,7 +483,7 @@ def run_fetch(
         },
     )
 
-    with connect_db(db_path) as connection:
+    with open_db(db_path) as connection:
         finish_crawl_run(
             connection,
             run_id=crawl_run_id,

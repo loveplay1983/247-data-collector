@@ -11,9 +11,9 @@ import xml.etree.ElementTree as ET
 
 from .config import load_settings
 from .db import (
-    connect_db,
     finish_crawl_run,
     init_db,
+    open_db,
     record_discovered_document_entries,
     record_discovered_documents,
     start_crawl_run,
@@ -589,7 +589,7 @@ def run_discovery(
     logs_root.mkdir(parents=True, exist_ok=True)
     results: list[DiscoveryResult] = []
 
-    with connect_db(db_path) as connection:
+    with open_db(db_path) as connection:
         for source_definition in source_definitions:
             source_id = upsert_source(
                 connection,

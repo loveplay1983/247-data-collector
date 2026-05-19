@@ -9,5 +9,7 @@ WorkingDirectory=/opt/247-data-collector
 Environment=AUTO_SCRAPY_SOURCES_CONFIG_PATH=config/sources/target_smoke_sources.toml
 ExecStart=/home/xuan/xuanStudy/env-utils/miniforge3/envs/247-data-collector/bin/uv run python -m app.runtime
 
+LimitNOFILE=1048576
+
 # Optional: Ensure Python logs appear immediately in journalctl
 Environment=PYTHONUNBUFFERED=1
