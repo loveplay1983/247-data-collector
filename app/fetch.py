@@ -192,6 +192,8 @@ class RawFetchSpider(scrapy.Spider):
         raw_dir: str,
         log_path: str,
         run_stats: dict[str, object],
+        crawl_run_id: int | None = None,
+        source_key: str | None = None,
     ) -> None:
         super().__init__()
         self.documents = documents
@@ -199,6 +201,9 @@ class RawFetchSpider(scrapy.Spider):
         self.raw_dir = Path(raw_dir)
         self.log_path = Path(log_path)
         self.run_stats = run_stats
+        self.crawl_run_id = crawl_run_id
+        self.source_key = source_key
+        self.log_level = load_settings().log_level
 
     def start_requests(self):
         for document in self.documents:
@@ -243,17 +248,20 @@ class RawFetchSpider(scrapy.Spider):
                     http_etag=etag,
                     http_last_modified=last_modified,
                 )
-            _append_log(
-                self.log_path,
-                {
-                    "url": response.url,
-                    "document_id": document_id,
-                    "status": (
-                        "unchanged" if previous_extract_status == "extracted" else "fetched"
-                    ),
-                    "fetch_method": fetch_method,
-                },
-            )
+            if self.log_level != "summary":
+                _append_log(
+                    self.log_path,
+                    {
+                        "crawl_run_id": self.crawl_run_id,
+                        "source_key": self.source_key,
+                        "url": response.url,
+                        "document_id": document_id,
+                        "status": (
+                            "unchanged" if previous_extract_status == "extracted" else "fetched"
+                        ),
+                        "fetch_method": fetch_method,
+                    },
+                )
             return
 
         if fetch_method == "http" and should_escalate_to_browser(response):
@@ -266,15 +274,18 @@ class RawFetchSpider(scrapy.Spider):
                     fetch_status="needs_browser",
                 )
 
-            _append_log(
-                self.log_path,
-                {
-                    "url": response.url,
-                    "document_id": document_id,
-                    "status": "needs_browser",
-                    "fetch_method": "http",
-                },
-            )
+            if self.log_level != "summary":
+                _append_log(
+                    self.log_path,
+                    {
+                        "crawl_run_id": self.crawl_run_id,
+                        "source_key": self.source_key,
+                        "url": response.url,
+                        "document_id": document_id,
+                        "status": "needs_browser",
+                        "fetch_method": "http",
+                    },
+                )
 
             yield response.request.replace(
                 callback=self.parse_document,
@@ -311,18 +322,21 @@ class RawFetchSpider(scrapy.Spider):
                     http_etag=etag,
                     http_last_modified=last_modified,
                 )
-            _append_log(
-                self.log_path,
-                {
-                    "url": response.url,
-                    "document_id": document_id,
-                    "status": (
-                        "unchanged" if previous_extract_status == "extracted" else "fetched"
-                    ),
-                    "raw_path": current_raw_path,
-                    "fetch_method": fetch_method,
-                },
-            )
+            if self.log_level != "summary":
+                _append_log(
+                    self.log_path,
+                    {
+                        "crawl_run_id": self.crawl_run_id,
+                        "source_key": self.source_key,
+                        "url": response.url,
+                        "document_id": document_id,
+                        "status": (
+                            "unchanged" if previous_extract_status == "extracted" else "fetched"
+                        ),
+                        "raw_path": current_raw_path,
+                        "fetch_method": fetch_method,
+                    },
+                )
             return
 
         self.run_stats["fetched_count"] = int(self.run_stats["fetched_count"]) + 1
@@ -343,12 +357,15 @@ class RawFetchSpider(scrapy.Spider):
                 mark_extract_pending=True,
             )
 
-        _append_log(
-            self.log_path,
-            {
-                "url": response.url,
-                "document_id": document_id,
-                "status": "fetched",
+        if self.log_level != "summary":
+            _append_log(
+                self.log_path,
+                {
+                    "crawl_run_id": self.crawl_run_id,
+                    "source_key": self.source_key,
+                    "url": response.url,
+                    "document_id": document_id,
+                    "status": "fetched",
                     "raw_path": current_raw_path,
                     "raw_content_hash": raw_content_hash,
                     "fetch_method": fetch_method,
@@ -376,6 +393,8 @@ class RawFetchSpider(scrapy.Spider):
         _append_log(
             self.log_path,
             {
+                "crawl_run_id": self.crawl_run_id,
+                "source_key": self.source_key,
                 "url": request.url,
                 "document_id": document_id,
                 "status": "fetch_failed",
@@ -391,6 +410,7 @@ def run_fetch(
     database_path: Path | None = None,
     raw_dir: Path | None = None,
     log_dir: Path | None = None,
+    log_path: Path | None = None,
 ) -> FetchRunResult:
     settings = load_settings()
     db_path = init_db(database_path)
@@ -419,9 +439,9 @@ def run_fetch(
             run_kind=FETCH_RUN_KIND,
         )
 
-    log_path = logs_root / f"fetch-run-{crawl_run_id}.log"
+    active_log_path = log_path or (logs_root / f"fetch-run-{crawl_run_id}.log")
     _append_log(
-        log_path,
+        active_log_path,
         {
             "event": "run_started",
             "run_kind": FETCH_RUN_KIND,
@@ -446,8 +466,10 @@ def run_fetch(
             documents=documents,
             database_path=str(db_path),
             raw_dir=str(raw_root),
-            log_path=str(log_path),
+            log_path=str(active_log_path),
             run_stats=run_stats,
+            crawl_run_id=crawl_run_id,
+            source_key=source_key,
         )
         process.start()
 
@@ -464,9 +486,9 @@ def run_fetch(
         status = "success"
 
     error_message = "; ".join(str(item) for item in errors) if errors else None
-    relative_log_path = (Path("data") / "logs" / log_path.name).as_posix()
+    relative_log_path = (Path("data") / "logs" / active_log_path.name).as_posix()
     _append_log(
-        log_path,
+        active_log_path,
         {
             "event": "run_finished",
             "run_kind": FETCH_RUN_KIND,

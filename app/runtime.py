@@ -359,12 +359,12 @@ class RuntimeRunResult:
 #   Windows → "spawn" (no fork available)
 #   Linux / Ubuntu prod → "fork" (faster, skips re-import)
 # ---------------------------------------------------------------------------
-
 def _fetch_worker(
     source_key: str,
     database_path: str,
     raw_dir: str | None,
     log_dir: str | None,
+    log_path: str | None,
     result_queue: "multiprocessing.Queue[tuple[str, object]]",
 ) -> None:
     """Runs inside the child process. Import of run_fetch is deferred here
@@ -377,6 +377,7 @@ def _fetch_worker(
             database_path=Path(database_path),
             raw_dir=Path(raw_dir) if raw_dir else None,
             log_dir=Path(log_dir) if log_dir else None,
+            log_path=Path(log_path) if log_path else None,
         )
         result_queue.put((
             "ok",
@@ -402,6 +403,7 @@ def _run_fetch_isolated(
     database_path: Path,
     raw_dir: Path | None = None,
     log_dir: Path | None = None,
+    log_path: Path | None = None,
     timeout_seconds: int = 120,
 ) -> FetchRunResult:
     """
@@ -420,6 +422,7 @@ def _run_fetch_isolated(
             str(database_path),
             str(raw_dir) if raw_dir else None,
             str(log_dir) if log_dir else None,
+            str(log_path) if log_path else None,
             queue,
         ),
         daemon=True,
@@ -451,6 +454,7 @@ def _run_fetch_isolated(
         queue.join_thread()
         if hasattr(process, "close"):
             process.close()
+
 
     if status == "err":
         raise RuntimeError(payload)
@@ -594,11 +598,15 @@ def run_pipeline_once(
             },
         )
 
-        discovery_results = run_discovery_stage(
-            config_path=config_path,
-            database_path=db_path,
-            source_keys=source_keys,
-        )
+        discovery_kwargs = {
+            "config_path": config_path,
+            "database_path": db_path,
+            "source_keys": source_keys,
+        }
+        if settings.log_mode == "centralized":
+            discovery_kwargs["log_path"] = runtime_log_path
+
+        discovery_results = run_discovery_stage(**discovery_kwargs)
         source_summaries: list[RuntimeSourceSummary] = []
         failed_source_count = 0
         discovered_new_count = 0
@@ -693,6 +701,10 @@ def run_pipeline_once(
                     },
                     )
                 )
+
+            if settings.log_mode == "centralized":
+                for _, _, kwargs in stage_specs:
+                    kwargs["log_path"] = runtime_log_path
 
             for stage_name, stage_runner, stage_kwargs in stage_specs:
                 _append_log(

@@ -574,6 +574,7 @@ def run_discovery(
     config_path: Path | None = None,
     database_path: Path | None = None,
     log_dir: Path | None = None,
+    log_path: Path | None = None,
     source_keys: tuple[str, ...] | None = None,
 ) -> list[DiscoveryResult]:
     settings = load_settings()
@@ -605,20 +606,20 @@ def run_discovery(
                 run_kind=f"discovery:{source_definition.source_type}",
             )
             run_kind = f"discovery:{source_definition.source_type}"
-            log_path = logs_root / f"discovery-run-{crawl_run_id}.log"
-            relative_log_path = (Path("data") / "logs" / log_path.name).as_posix()
+            active_log_path = log_path or (logs_root / f"discovery-run-{crawl_run_id}.log")
+            relative_log_path = (Path("data") / "logs" / active_log_path.name).as_posix()
             _append_log(
-                log_path,
+                active_log_path,
                 {
                     "event": "run_started",
                     "run_kind": run_kind,
                     "crawl_run_id": crawl_run_id,
                     "source_key": source_definition.source_key,
-                        "source_type": source_definition.source_type,
-                        "status": "running",
-                        "max_depth": source_definition.max_depth,
-                    },
-                )
+                    "source_type": source_definition.source_type,
+                    "status": "running",
+                    "max_depth": source_definition.max_depth,
+                },
+            )
 
             try:
                 discovery_entries, failed_seeds = _discover_source_entries_with_failures(
@@ -638,7 +639,7 @@ def run_discovery(
                     ],
                 )
                 _append_log(
-                    log_path,
+                    active_log_path,
                     {
                         "event": "discovered_urls",
                         "run_kind": run_kind,
@@ -654,7 +655,7 @@ def run_discovery(
                 )
                 for failed_seed in failed_seeds:
                     _append_log(
-                        log_path,
+                        active_log_path,
                         {
                             "event": "seed_expansion_failed",
                             "run_kind": run_kind,
@@ -679,7 +680,7 @@ def run_discovery(
                     log_path=relative_log_path,
                 )
                 _append_log(
-                    log_path,
+                    active_log_path,
                     {
                         "event": "run_finished",
                         "run_kind": run_kind,
@@ -696,7 +697,7 @@ def run_discovery(
                 )
             except Exception as exc:
                 _append_log(
-                    log_path,
+                    active_log_path,
                     {
                         "event": "run_failed",
                         "run_kind": run_kind,

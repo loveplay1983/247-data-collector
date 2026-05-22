@@ -102,6 +102,7 @@ def run_summary_draft(
     cleaned_dir: Path | None = None,
     derived_dir: Path | None = None,
     log_dir: Path | None = None,
+    log_path: Path | None = None,
     prompt_path: Path | None = None,
     model_name: str | None = None,
     base_url: str | None = None,
@@ -118,6 +119,7 @@ def run_summary_draft(
     active_model_name = model_name or settings.ollama_model
     active_base_url = base_url or settings.ollama_base_url
     active_timeout_seconds = timeout_seconds or settings.ollama_timeout_seconds
+    log_level = settings.log_level
 
     derived_root.mkdir(parents=True, exist_ok=True)
     logs_root.mkdir(parents=True, exist_ok=True)
@@ -141,9 +143,9 @@ def run_summary_draft(
             run_kind=SUMMARY_DRAFT_RUN_KIND,
         )
 
-    log_path = logs_root / f"summary-draft-run-{crawl_run_id}.log"
+    active_log_path = log_path or (logs_root / f"summary-draft-run-{crawl_run_id}.log")
     _append_log(
-        log_path,
+        active_log_path,
         {
             "event": "run_started",
             "run_kind": SUMMARY_DRAFT_RUN_KIND,
@@ -183,19 +185,22 @@ def run_summary_draft(
                 )
             if existing_version is not None:
                 skipped_count += 1
-                _append_log(
-                    log_path,
-                    {
-                        "url": canonical_url,
-                        "document_id": document_id,
-                        "status": "skipped_unchanged",
-                        "version_kind": SUMMARY_DRAFT_VERSION_KIND,
-                        "version_id": int(existing_version["id"]),
-                        "file_path": str(existing_version["file_path"]),
-                        "model_name": active_model_name,
-                        "prompt_name": prompt_name,
-                    },
-                )
+                if log_level != "summary":
+                    _append_log(
+                        active_log_path,
+                        {
+                            "crawl_run_id": crawl_run_id,
+                            "source_key": source_key,
+                            "url": canonical_url,
+                            "document_id": document_id,
+                            "status": "skipped_unchanged",
+                            "version_kind": SUMMARY_DRAFT_VERSION_KIND,
+                            "version_id": int(existing_version["id"]),
+                            "file_path": str(existing_version["file_path"]),
+                            "model_name": active_model_name,
+                            "prompt_name": prompt_name,
+                        },
+                    )
                 continue
 
             summary_text = generate_summary(
@@ -218,26 +223,31 @@ def run_summary_draft(
             )
 
             generated_count += 1
-            _append_log(
-                log_path,
-                {
-                    "url": canonical_url,
-                    "document_id": document_id,
-                    "status": "generated",
-                    "version_kind": SUMMARY_DRAFT_VERSION_KIND,
-                    "version_id": version.version_id,
-                    "file_path": version.file_path,
-                    "model_name": active_model_name,
-                    "prompt_name": prompt_name,
-                },
-            )
+            if log_level != "summary":
+                _append_log(
+                    active_log_path,
+                    {
+                        "crawl_run_id": crawl_run_id,
+                        "source_key": source_key,
+                        "url": canonical_url,
+                        "document_id": document_id,
+                        "status": "generated",
+                        "version_kind": SUMMARY_DRAFT_VERSION_KIND,
+                        "version_id": version.version_id,
+                        "file_path": version.file_path,
+                        "model_name": active_model_name,
+                        "prompt_name": prompt_name,
+                    },
+                )
         except Exception as exc:
             failed_count += 1
             error_text = f"{canonical_url}: {exc}"
             errors.append(error_text)
             _append_log(
-                log_path,
+                active_log_path,
                 {
+                    "crawl_run_id": crawl_run_id,
+                    "source_key": source_key,
                     "url": canonical_url,
                     "document_id": document_id,
                     "status": "generate_failed",
@@ -254,9 +264,9 @@ def run_summary_draft(
         status = "success"
 
     error_message = "; ".join(errors) if errors else None
-    relative_log_path = (Path("data") / "logs" / log_path.name).as_posix()
+    relative_log_path = (Path("data") / "logs" / active_log_path.name).as_posix()
     _append_log(
-        log_path,
+        active_log_path,
         {
             "event": "run_finished",
             "run_kind": SUMMARY_DRAFT_RUN_KIND,

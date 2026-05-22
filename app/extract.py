@@ -265,6 +265,7 @@ def run_extract(
     raw_dir: Path | None = None,
     cleaned_dir: Path | None = None,
     log_dir: Path | None = None,
+    log_path: Path | None = None,
 ) -> ExtractRunResult:
     settings = load_settings()
     db_path = init_db(database_path)
@@ -273,6 +274,7 @@ def run_extract(
     logs_root = Path(log_dir or settings.log_dir)
     cleaned_root.mkdir(parents=True, exist_ok=True)
     logs_root.mkdir(parents=True, exist_ok=True)
+    log_level = settings.log_level
 
     with open_db(db_path) as connection:
         source_id = get_source_id_by_key(connection, source_key)
@@ -292,9 +294,9 @@ def run_extract(
             run_kind=EXTRACT_RUN_KIND,
         )
 
-    log_path = logs_root / f"extract-run-{crawl_run_id}.log"
+    active_log_path = log_path or (logs_root / f"extract-run-{crawl_run_id}.log")
     _append_log(
-        log_path,
+        active_log_path,
         {
             "event": "run_started",
             "run_kind": EXTRACT_RUN_KIND,
@@ -341,16 +343,19 @@ def run_extract(
                 )
 
             extracted_count += 1
-            _append_log(
-                log_path,
-                {
-                    "url": canonical_url,
-                    "document_id": document_id,
-                    "status": "extracted",
-                    "cleaned_path": stored_cleaned_path,
-                    "extractor": output.extractor_name,
-                },
-            )
+            if log_level != "summary":
+                _append_log(
+                    active_log_path,
+                    {
+                        "crawl_run_id": crawl_run_id,
+                        "source_key": source_key,
+                        "url": canonical_url,
+                        "document_id": document_id,
+                        "status": "extracted",
+                        "cleaned_path": stored_cleaned_path,
+                        "extractor": output.extractor_name,
+                    },
+                )
         except FileNotFoundError as exc:
             failed_count += 1
             error_text = f"{canonical_url}: raw artifact missing; queued for refetch: {current_raw_path}"
@@ -360,8 +365,10 @@ def run_extract(
                 requeue_document_for_fetch(connection, document_id=document_id)
 
             _append_log(
-                log_path,
+                active_log_path,
                 {
+                    "crawl_run_id": crawl_run_id,
+                    "source_key": source_key,
                     "url": canonical_url,
                     "document_id": document_id,
                     "status": "raw_missing_requeued",
@@ -382,8 +389,10 @@ def run_extract(
                 )
 
             _append_log(
-                log_path,
+                active_log_path,
                 {
+                    "crawl_run_id": crawl_run_id,
+                    "source_key": source_key,
                     "url": canonical_url,
                     "document_id": document_id,
                     "status": LOW_QUALITY_STATUS,
@@ -403,8 +412,10 @@ def run_extract(
                 )
 
             _append_log(
-                log_path,
+                active_log_path,
                 {
+                    "crawl_run_id": crawl_run_id,
+                    "source_key": source_key,
                     "url": canonical_url,
                     "document_id": document_id,
                     "status": "extract_failed",
@@ -418,9 +429,9 @@ def run_extract(
         status = "success"
 
     error_message = "; ".join(errors) if errors else None
-    relative_log_path = (Path("data") / "logs" / log_path.name).as_posix()
+    relative_log_path = (Path("data") / "logs" / active_log_path.name).as_posix()
     _append_log(
-        log_path,
+        active_log_path,
         {
             "event": "run_finished",
             "run_kind": EXTRACT_RUN_KIND,

@@ -234,8 +234,25 @@ def run_detail(run_id: int):
     log_status = "not_recorded"
     if run["log_path"]:
         try:
-            log_text = _read_stored_text(str(run["log_path"]), expected_layer="logs")
+            raw_log = _read_stored_text(str(run["log_path"]), expected_layer="logs")
             log_status = "available"
+
+            import json
+            filtered_lines = []
+            for line in raw_log.splitlines():
+                trimmed = line.strip()
+                if not trimmed:
+                    continue
+                try:
+                    payload = json.loads(trimmed)
+                    if "crawl_run_id" in payload:
+                        if payload["crawl_run_id"] == run_id:
+                            filtered_lines.append(line)
+                    else:
+                        filtered_lines.append(line)
+                except json.JSONDecodeError:
+                    filtered_lines.append(line)
+            log_text = "\n".join(filtered_lines)
         except FileNotFoundError:
             log_text = None
             log_status = "missing"

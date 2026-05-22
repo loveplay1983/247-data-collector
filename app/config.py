@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import sys
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -27,6 +28,8 @@ class Settings:
     ollama_model: str
     ollama_timeout_seconds: int
     secret_key: str
+    log_mode: str
+    log_level: str
 
 
 def load_settings() -> Settings:
@@ -51,6 +54,13 @@ def load_settings() -> Settings:
         os.getenv("AUTO_SCRAPY_DATABASE_PATH", instance_dir / "auto_scrapy.sqlite3")
     )
 
+    is_test = "pytest" in sys.modules or "PYTEST_CURRENT_TEST" in os.environ
+    default_log_mode = "separate" if is_test else "centralized"
+    default_log_level = "debug" if is_test else "summary"
+
+    log_mode = os.getenv("AUTO_SCRAPY_LOG_MODE", default_log_mode)
+    log_level = os.getenv("AUTO_SCRAPY_LOG_LEVEL", default_log_level)
+
     return Settings(
         root_dir=ROOT_DIR,
         config_dir=config_dir,
@@ -73,4 +83,6 @@ def load_settings() -> Settings:
         ollama_model=os.getenv("AUTO_SCRAPY_OLLAMA_MODEL", "qwen2.5-coder:7b"),
         ollama_timeout_seconds=int(os.getenv("AUTO_SCRAPY_OLLAMA_TIMEOUT_SECONDS", "120")),
         secret_key=os.getenv("AUTO_SCRAPY_SECRET_KEY", "dev"),
+        log_mode=log_mode,
+        log_level=log_level,
     )
